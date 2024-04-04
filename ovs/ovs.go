@@ -36,10 +36,15 @@ type InterfaceType string
 const (
 	InterfaceTypeGRE      InterfaceType = "gre"
 	InterfaceTypeInternal InterfaceType = "internal"
+	InterfaceTypeSystem   InterfaceType = "system"
 	InterfaceTypePatch    InterfaceType = "patch"
 	InterfaceTypeSTT      InterfaceType = "stt"
 	InterfaceTypeVXLAN    InterfaceType = "vxlan"
 )
+
+func (t InterfaceType) String() string {
+	return string(t)
+}
 
 // A PortAction is a port actions to change the port characteristics of the
 // specific port through the ModPort API.

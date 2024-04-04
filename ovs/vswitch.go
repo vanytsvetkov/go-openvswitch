@@ -17,6 +17,9 @@ package ovs
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
+	"net"
+	"strconv"
 	"strings"
 )
 
@@ -162,12 +165,14 @@ type VSwitchGetService struct {
 // Bridge gets configuration for a bridge and returns the values through
 // a BridgeOptions struct.
 func (v *VSwitchGetService) Bridge(bridge string) (BridgeOptions, error) {
-	// We only support the protocol option at this point.
-	args := []string{"--format=json", "get", "bridge", bridge, "protocols"}
+	// We only support the _uuid, protocol options at this point.
+	args := []string{"--format=json", "get", "bridge", bridge, "_uuid", "protocols"}
 	out, err := v.v.exec(args...)
 	if err != nil {
 		return BridgeOptions{}, err
 	}
+
+	var UUID uuid.UUID
 
 	var protocols []string
 	if err := json.Unmarshal(out, &protocols); err != nil {
@@ -175,7 +180,103 @@ func (v *VSwitchGetService) Bridge(bridge string) (BridgeOptions, error) {
 	}
 
 	return BridgeOptions{
+		UUID:      UUID,
 		Protocols: protocols,
+	}, nil
+}
+
+// Port gets configuration for a port and returns the values through
+// a PortOptions struct.
+func (v *VSwitchGetService) Port(port string) (PortOptions, error) {
+	// We only support the _uuid, tag, vlan_mode, trunks options at this point.
+	args := []string{"--format=json", "get", "port", port, "_uuid", "tag", "vlan_mode", "trunks"}
+	out, err := v.v.exec(args...)
+	if err != nil {
+		return PortOptions{}, err
+	}
+
+	// If the option is not exist, OVS will return "[]\n"
+	options := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+	var UUID uuid.UUID
+	if options[0] != "[]" {
+		UUID, err = uuid.Parse(options[0])
+		if err != nil {
+			return PortOptions{}, err
+		}
+	}
+
+	var tag []int
+	if options[1] != "[]" {
+		tagNum, err := strconv.ParseInt(options[1], 10, 12)
+		if err != nil {
+			return PortOptions{}, err
+		}
+		tag = []int{int(tagNum)}
+	}
+
+	var vlanMode []string
+	if options[2] != "[]" {
+		vlanMode = []string{options[2]}
+	}
+
+	var trunk []int
+	if options[3] != "[]" {
+		if err := json.Unmarshal([]byte(options[3]), &trunk); err != nil {
+			return PortOptions{}, err
+		}
+	}
+
+	return PortOptions{
+		UUID:     UUID,
+		Tag:      tag,
+		VlanMode: vlanMode,
+		Trunks:   trunk,
+	}, nil
+}
+
+// Interface gets configuration for a port and returns the values through
+// a InterfaceOptions struct.
+func (v *VSwitchGetService) Interface(i string) (InterfaceOptions, error) {
+	// We only support the _uuid, ifindex, mac_in_use options at this point.
+	args := []string{"--format=json", "get", "interface", i, "_uuid", "ifindex", "mac_in_use"}
+	out, err := v.v.exec(args...)
+	if err != nil {
+		return InterfaceOptions{}, err
+	}
+
+	// If the option is not exist, OVS will return "[]\n"
+	options := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+	var UUID uuid.UUID
+	if options[0] != "[]" {
+		UUID, err = uuid.Parse(options[0])
+		if err != nil {
+			return InterfaceOptions{}, err
+		}
+	}
+
+	var ifindex uint32
+	if options[1] != "[]" {
+		index, err := strconv.ParseUint(options[1], 10, 32)
+		if err != nil {
+			return InterfaceOptions{}, err
+		}
+		ifindex = uint32(index)
+	}
+
+	var mac net.HardwareAddr
+	if options[2] != "[]" {
+		mac, err = net.ParseMAC(strings.ReplaceAll(options[2], "\"", ""))
+		if err != nil {
+			return InterfaceOptions{}, err
+		}
+	}
+
+	return InterfaceOptions{
+		UUID:         UUID,
+		IfIndex:      ifindex,
+		HardwareAddr: mac,
 	}, nil
 }
 
@@ -200,6 +301,9 @@ func (v *VSwitchSetService) Bridge(bridge string, options BridgeOptions) error {
 
 // An BridgeOptions enables configuration of a bridge.
 type BridgeOptions struct {
+	// UUID of entity in OvSDB
+	UUID uuid.UUID
+
 	// Protocols specifies the OpenFlow protocols the bridge should use.
 	Protocols []string
 }
@@ -211,6 +315,63 @@ func (o BridgeOptions) slice() []string {
 
 	if len(o.Protocols) > 0 {
 		s = append(s, fmt.Sprintf("protocols=%s", strings.Join(o.Protocols, ",")))
+	}
+
+	return s
+}
+
+// Port sets configuration for a port using the values from a PortOptions
+// struct.
+func (v *VSwitchSetService) Port(port string, options PortOptions) error {
+	// Prepend command line arguments before expanding options slice
+	// and appending it
+	args := []string{"set", "port", port}
+	args = append(args, options.slice()...)
+
+	_, err := v.v.exec(args...)
+	return err
+}
+
+// An PortOptions struct enables configuration of a port.
+type PortOptions struct {
+	// UUID of entity in OvSDB
+	UUID uuid.UUID
+
+	// Tag is optional integer, in range 0 to 4,095
+	Tag []int
+
+	// VlanMode is optional string, one of access,trunk or
+	// dot1q-tunnel,  native-tagged,  native-un‐tagged
+	VlanMode []string
+
+	// Trunks
+	// set of up to 4,096 integers, in range 0 to 4,095
+	Trunks []int
+
+	// ExternalIDs
+	// map of string-string pairs
+	ExternalIDs map[string]string
+}
+
+// slice creates a string slice containing any non-zero option values from the
+// struct in the format expected by Open vSwitch.
+func (o PortOptions) slice() []string {
+	var s []string
+
+	if len(o.Tag) != 0 {
+		s = append(s, fmt.Sprintf("tag=%d,", o.Tag[0]))
+	}
+
+	if len(o.VlanMode) != 0 {
+		s = append(s, fmt.Sprintf("vlan_mode=%s", o.VlanMode[0]))
+	}
+
+	if len(o.Trunks) > 0 {
+		var strTrunk string
+		for _, trunk := range o.Trunks {
+			strTrunk += fmt.Sprintf("%d,", trunk)
+		}
+		s = append(s, fmt.Sprintf("trunk=%s", strTrunk))
 	}
 
 	return s
@@ -230,6 +391,16 @@ func (v *VSwitchSetService) Interface(ifi string, options InterfaceOptions) erro
 
 // An InterfaceOptions struct enables configuration of an Interface.
 type InterfaceOptions struct {
+	// UUID of entity in OvSDB
+	UUID uuid.UUID
+
+	// IfIndex is interface index in host system.
+	// (optional integer, in range 0 to 4,294,967,295)
+	IfIndex uint32
+
+	// MAC address of interface.
+	HardwareAddr net.HardwareAddr
+
 	// Type specifies the Open vSwitch interface type.
 	Type InterfaceType
 

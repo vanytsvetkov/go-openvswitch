@@ -501,6 +501,99 @@ func TestClientVSwitchSetBridgeProtocolsOK(t *testing.T) {
 	}
 }
 
+func TestClientVSwitchGetPortOptionsOK(t *testing.T) {
+	const port = "bond0"
+	vlanMode := "trunk"
+	trunks := []int{1, 2, 3, 4, 5}
+
+	c := testClient([]OptionFunc{Timeout(1)}, func(cmd string, args ...string) ([]byte, error) {
+		if want, got := "ovs-vsctl", cmd; want != got {
+			t.Fatalf("incorrect command:\n- want: %v\n-  got: %v",
+				want, got)
+		}
+
+		wantArgs := []string{
+			"--timeout=1",
+			"--format=json",
+			"get",
+			"port",
+			port,
+			"tag",
+			"vlan_mode",
+			"trunk",
+		}
+		if want, got := wantArgs, args; !reflect.DeepEqual(want, got) {
+			t.Fatalf("incorrect arguments\n- want: %v\n-  got: %v",
+				want, got)
+		}
+
+		// Make the return value with newline to simulate
+		// the ovs-vsctl output.
+		data := "[]\n"
+		data += fmt.Sprintf("%s\n", vlanMode)
+		t, err := json.Marshal(&trunks)
+		if err != nil {
+			return nil, err
+		}
+		data += fmt.Sprintf("%s\n", string(t))
+		return []byte(fmt.Sprintln(data)), err
+	})
+
+	got, err := c.VSwitch.Get.Port(port)
+	if err != nil {
+		t.Fatalf("unexpected error for Client.VSwitch.Get.Port: %v", err)
+	}
+	if got.Tag != nil {
+		t.Fatalf("unexpected tag for Client.VSwitch.Get.Port: %v", got.Tag)
+	}
+	if !reflect.DeepEqual(got.VlanMode, vlanMode) {
+		t.Fatalf("unexpected vlan_mode for Client.VSwitch.Get.Port: %v", got.VlanMode)
+	}
+	if !reflect.DeepEqual(got.Trunks, trunks) {
+		t.Fatalf("unexpected trunk for Client.VSwitch.Get.Port: %v", got.Trunks)
+	}
+}
+
+func TestClientVSwitchSetPortOptionsOK(t *testing.T) {
+	const port = "bond0"
+	vlanMode := "trunk"
+	trunks := []int{1, 2, 3, 4, 5}
+
+	c := testClient([]OptionFunc{Timeout(1)}, func(cmd string, args ...string) ([]byte, error) {
+		if want, got := "ovs-vsctl", cmd; want != got {
+			t.Fatalf("incorrect command:\n- want: %v\n-  got: %v",
+				want, got)
+		}
+
+		var trunkSequence string
+		for _, trunk := range trunks {
+			trunkSequence += fmt.Sprintf("%d,", trunk)
+		}
+		wantArgs := []string{
+			"--timeout=1",
+			"set",
+			"port",
+			port,
+			fmt.Sprintf("vlan_mode=%s", vlanMode),
+			fmt.Sprintf("trunk=%s", trunkSequence),
+		}
+		if want, got := wantArgs, args; !reflect.DeepEqual(want, got) {
+			t.Fatalf("incorrect arguments\n- want: %v\n-  got: %v",
+				want, got)
+		}
+
+		return nil, nil
+	})
+
+	err := c.VSwitch.Set.Port(port, PortOptions{
+		VlanMode: []string{vlanMode},
+		Trunks:   trunks,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error for Client.VSwitch.Set.Bridge: %v", err)
+	}
+}
+
 func TestClientVSwitchSetInterfaceTypeOK(t *testing.T) {
 	ifi := "bond0"
 	ifiType := InterfaceTypePatch
